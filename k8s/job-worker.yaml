@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: llmtrain-workers
+  labels:
+    app: llmtrain
+spec:
+  serviceName: llmtrain-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app: llmtrain
+  template:
+    metadata:
+      labels:
+        app: llmtrain
+    spec:
+      terminationGracePeriodSeconds: 120
+      volumes:
+        - name: checkpoints
+          persistentVolumeClaim:
+            claimName: llmtrain-pvc
+        - name: metrics
+          emptyDir: {}
+      restartPolicy: Always
+      containers:
+        - name: trainer
+          image: ghcr.io/example/llmtrain:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MASTER_ADDR
+              value: llmtrain-headless
+            - name: MASTER_PORT
+              value: "29500"
+            - name: GPUS_PER_NODE
+              value: "4"
+            - name: NUM_NODES
+              value: "2"
+          volumeMounts:
+            - mountPath: /checkpoints
+              name: checkpoints
+            - mountPath: /metrics
+              name: metrics
+          resources:
+            limits:
+              nvidia.com/gpu: 4
+          command:
+            - /bin/bash
+            - -lc
+            - |
+              set -euo pipefail
+              NODE_RANK=${HOSTNAME##*-}
+              GPUS=${GPUS_PER_NODE}
+              NUM_NODES=${NUM_NODES}
+              WORLD_SIZE=$((NUM_NODES * GPUS))
+              export NODE_RANK WORLD_SIZE
+              llmtrain run --num-nodes ${NUM_NODES} --gpus-per-node ${GPUS} --node-rank ${NODE_RANK} --master-addr ${MASTER_ADDR} --master-port ${MASTER_PORT} --override trainer.checkpoint_dir=/checkpoints --override trainer.metrics_dir=/metrics
+      restartPolicy: OnFailure
